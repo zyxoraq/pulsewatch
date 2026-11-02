@@ -1,6 +1,10 @@
+import { createHistoryClient } from './history-client.js';
+
 const $ = selector => document.querySelector(selector);
 let dashboard = { monitors: [], incidents: [], running: [] };
 let fetching = false, noticeTimer, deleteId;
+let historySelection = null, historyExportController = null, historyExportVersion = 0;
+const historyClient = createHistoryClient({ onState: renderHistoryState });
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -71,6 +75,7 @@ function monitorCard(monitor) {
   }
   const message = dashboard.running.includes(monitor.id) ? 'Checking endpoint…' : monitor.last ? (monitor.last.ok ? `HTTP ${monitor.last.status} · ${ms(monitor.last.duration_ms)} ms · response received` : monitor.last.error) : 'Automatic checks start within one second.';
   content.append(heading, chart, chartLabels, stats, element('p', `card-message${monitor.last && !monitor.last.ok ? ' failure' : ''}`, message));
+  content.append(action('View history →', `View retained measurements for ${monitor.name}`, () => openHistory(monitor), 'history-open'));
   const footer = element('div', 'card-footer');
   footer.append(element('small', '', `Every ${monitor.interval_ms / 1000}s · ${monitor.timeout_ms}ms timeout`));
   const actions = element('div', 'card-actions');
@@ -128,6 +133,111 @@ function openMonitor(monitor) {
   $('#monitor-enabled').checked = monitor?.enabled !== false;
   $('#form-error').textContent = ''; $('#monitor-dialog').showModal(); $('#monitor-name').focus();
 }
+
+function cancelHistoryExport() {
+  historyExportVersion++;
+  historyExportController?.abort(); historyExportController = null;
+  $('#history-export').textContent = '↓ Export CSV';
+}
+function loadHistory() {
+  if (!historySelection) return;
+  cancelHistoryExport();
+  $('#history-action-status').textContent = '';
+  for (const button of $('#history-filters').querySelectorAll('button')) button.setAttribute('aria-pressed', String(button.dataset.filter === historySelection.filter));
+  void historyClient.load(historySelection.id, historySelection.filter);
+}
+function openHistory(monitor) {
+  historySelection = { id: monitor.id, filter: 'all' };
+  const options = dashboard.monitors.map(item => {
+    const option = element('option', '', item.name); option.value = item.id; return option;
+  });
+  $('#history-monitor').replaceChildren(...options); $('#history-monitor').value = monitor.id;
+  $('#history-title').textContent = monitor.name; $('#history-url').textContent = monitor.url;
+  $('#history-dialog').showModal();
+  loadHistory();
+}
+function renderHistoryState(state) {
+  if (!$('#history-dialog').open || !historySelection || state.id !== historySelection.id || state.filter !== historySelection.filter) return;
+  const loading = state.status === 'loading';
+  $('#history-refresh').disabled = loading;
+  $('#history-export').disabled = state.status !== 'ready' || !state.data?.checks.length;
+  $('#history-table-wrap').setAttribute('aria-busy', String(loading));
+  $('#history-table-wrap').hidden = true;
+  $('#history-rows').replaceChildren();
+  $('#history-feedback').hidden = false;
+  $('#history-feedback').className = 'history-feedback';
+  $('#history-summary').textContent = '';
+  $('#history-snapshot').textContent = '';
+  if (loading) { $('#history-feedback').textContent = 'Loading retained measurements…'; return; }
+  if (state.status === 'error') {
+    $('#history-feedback').textContent = `${state.error} Select another monitor or refresh to try again.`;
+    $('#history-feedback').classList.add('error'); return;
+  }
+  const snapshot = state.data;
+  $('#history-title').textContent = snapshot.monitor.name;
+  $('#history-url').textContent = snapshot.monitor.url;
+  $('#history-snapshot').textContent = `Snapshot ${date(snapshot.generated_at)} · ${snapshot.returned_count} of ${snapshot.total_retained} samples`;
+  $('#history-summary').textContent = `${snapshot.total_retained} retained · ${percent(snapshot.summary.uptime)} sample success · p50 ${snapshot.summary.p50 === null ? '—' : `${ms(snapshot.summary.p50)} ms`} · p95 ${snapshot.summary.p95 === null ? '—' : `${ms(snapshot.summary.p95)} ms`}`;
+  if (!snapshot.checks.length) {
+    $('#history-feedback').textContent = snapshot.total_retained ? `No ${state.filter === 'success' ? 'successful' : 'failed'} checks in the retained history.` : 'No measurements yet. Close this view and run a check, then open history again.';
+    return;
+  }
+  const rows = snapshot.checks.map(check => {
+    const row = element('tr');
+    const timestamp = element('td', 'history-timestamp', new Date(check.checked_at).toLocaleString());
+    timestamp.title = new Date(check.checked_at).toISOString();
+    const result = element('td'); result.append(badge(check.ok ? 'Success' : 'Failure', check.ok ? 'up' : 'down'));
+    row.append(timestamp, result, element('td', '', check.status === null ? 'No response' : String(check.status)), element('td', 'history-duration', `${check.duration_ms.toLocaleString(undefined, { maximumFractionDigits: 2 })} ms`), element('td', 'history-error', check.error || '—'));
+    return row;
+  });
+  $('#history-rows').replaceChildren(...rows);
+  $('#history-feedback').hidden = true;
+  $('#history-table-wrap').hidden = false;
+  $('#history-table-wrap').scrollTop = 0;
+}
+$('#close-history').addEventListener('click', () => $('#history-dialog').close());
+$('#history-dialog').addEventListener('close', () => {
+  historySelection = null; historyClient.cancel(); cancelHistoryExport();
+});
+$('#history-monitor').addEventListener('change', () => {
+  if (!historySelection) return;
+  historySelection.id = $('#history-monitor').value;
+  const monitor = dashboard.monitors.find(item => item.id === historySelection.id);
+  $('#history-title').textContent = monitor?.name || 'Service history'; $('#history-url').textContent = monitor?.url || '';
+  loadHistory();
+});
+$('#history-filters').addEventListener('click', event => {
+  const button = event.target.closest('button[data-filter]');
+  if (!button || !historySelection || historySelection.filter === button.dataset.filter) return;
+  historySelection.filter = button.dataset.filter; loadHistory();
+});
+$('#history-refresh').addEventListener('click', loadHistory);
+$('#history-export').addEventListener('click', async () => {
+  if (!historySelection) return;
+  cancelHistoryExport();
+  const version = historyExportVersion;
+  const { id, filter } = historySelection;
+  historyExportController = new AbortController();
+  const isCurrent = () => historyExportVersion === version && $('#history-dialog').open && historySelection?.id === id && historySelection?.filter === filter;
+  $('#history-export').disabled = true; $('#history-export').textContent = 'Exporting…';
+  $('#history-action-status').textContent = '';
+  try {
+    const query = new URLSearchParams({ filter, limit: '500' });
+    const response = await fetch(`/api/monitors/${encodeURIComponent(id)}/history.csv?${query}`, { signal: AbortSignal.any([historyExportController.signal, AbortSignal.timeout(15000)]) });
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'Export failed'); }
+    const blob = await response.blob();
+    if (!isCurrent()) return;
+    const url = URL.createObjectURL(blob);
+    const link = element('a'); link.href = url; link.download = `pulsewatch-${id}-${filter}.csv`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    $('#history-action-status').textContent = 'CSV download requested. It contains the latest saved samples for this filter.';
+  } catch (error) {
+    if (isCurrent()) $('#history-action-status').textContent = `Could not export: ${error.name === 'TimeoutError' ? 'request timed out' : error.message}. Try again.`;
+  } finally {
+    if (isCurrent()) { $('#history-export').disabled = false; $('#history-export').textContent = '↓ Export CSV'; historyExportController = null; }
+  }
+});
 $('#add-button').addEventListener('click', () => openMonitor());
 $('#close-dialog').addEventListener('click', () => $('#monitor-dialog').close());
 $('#cancel-delete').addEventListener('click', () => $('#delete-dialog').close());

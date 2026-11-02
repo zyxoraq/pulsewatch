@@ -1,6 +1,6 @@
 {
   "name": "pulsewatch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "A local API reliability lab with SQLite history and deterministic failures",

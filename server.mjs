@@ -6,11 +6,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Store } from './src/store.mjs';
 import { Runner } from './src/runner.mjs';
 import { InputError } from './src/validation.mjs';
+import { historyCSV, parseHistoryQuery } from './src/history.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+  ['/history-client.js', ['history-client.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
 ]);
@@ -70,6 +72,19 @@ export function createApp({ dbPath = ':memory:', scheduling = true, now = Date.n
         for (const example of missing) store.create(example, true);
         await runner.runAll();
         return send(201, { ok: true });
+      }
+      const historyMatch = /^\/api\/monitors\/([a-f0-9-]+)\/history(\.csv)?$/.exec(path);
+      if (historyMatch && request.method === 'GET') {
+        const [, id, csv] = historyMatch;
+        const snapshot = store.historyDetails(id, parseHistoryQuery(url.searchParams));
+        if (!csv) return send(200, snapshot);
+        const content = historyCSV(snapshot);
+        response.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="pulsewatch-${id}-${snapshot.filter}.csv"`,
+          'Content-Length': Buffer.byteLength(content),
+        });
+        response.end(content); return;
       }
       const match = /^\/api\/monitors\/([a-f0-9-]+)(\/run)?$/.exec(path);
       if (match) {

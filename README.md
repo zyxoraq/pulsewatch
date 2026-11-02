@@ -28,6 +28,7 @@ node --test
 - Configure a GET endpoint, expected status, timeout and interval.
 - Run one check or all enabled monitors immediately.
 - Inspect the latest 60 samples as a latency timeline, including failed checks.
+- Open a monitor's full retained history, filter successful/failed checks, and download the selected filter as CSV.
 - Review observed success rate and successful-request p50/p95 latency.
 - Follow incidents from the first failed check through the first recovery.
 - Restart the app and retain your monitor configuration and measurement history.
@@ -42,6 +43,7 @@ The dashboard starts empty. Demo services are explicitly labelled, and every dis
 3. Edit **Demo / slow inventory** and raise its timeout to `1000` ms. The next check succeeds and resolves the open incident.
 4. Pause a monitor. Its existing history remains visible; the scheduler stops requesting it. The manual check button still works.
 5. Restart the app. The same stored history reappears; the demo checkout sequence resets when the process restarts.
+6. Select **View history →** on a service card, then **Failure**. Inspect observed statuses, exact durations and timeout errors; use **Export CSV** to download the latest saved failures.
 
 The flaky sequence advances on every request, including manual requests to its endpoint. With automatic checks enabled, the exact visible sequence depends on when you press **Check all**.
 
@@ -58,6 +60,20 @@ The flaky sequence advances on every request, including manual requests to its e
 | Retention | Latest 500 checks and at most 100 incidents per monitor. The dashboard renders 60 samples and the latest 100 incidents across the workspace. |
 
 HTTP redirects are recorded as their received 3xx status and **are not followed**. Paused services keep their previous status and incidents; pausing does not mark a failure as recovered. Changing the URL or expected status clears that monitor's checks/incidents because they belong to a different measurement series. Name, interval, enabled state and timeout edits preserve history.
+
+## Inspect and export measurements
+
+Choose **View history →** on any service card. The history window includes a monitor selector, **All checks / Success / Failure** filters, manual **Refresh**, and **Export CSV**. It reads the retained SQLite series, including samples older than the 60 shown in the dashboard timeline.
+
+Rows are ordered by completion/insertion order, newest first. The table shows each sample's observed timestamp, success/failure, received HTTP status (or **No response**), duration and original error. Timestamps display in the browser's local timezone; the tooltip and CSV use UTC. Timeout errors remain as originally recorded even after the timeout setting changes. Historical expected-status or timeout configuration is not stored as a separate per-sample field.
+
+The history window is a snapshot. It does not rearrange rows while you read; use **Refresh** to see newer checks. Switching monitor or filter cancels the previous request and ignores late responses. Loading, empty results and request errors are shown inside the window.
+
+The summary always describes **all retained checks for that monitor**, regardless of the active table filter: successful sample fraction and successful-request p50/p95. Selecting **Failure** therefore does not change the summary's success rate to zero.
+
+**Export CSV** requests a fresh snapshot for the selected monitor/filter. It can contain checks completed since the table was loaded. Export is limited to the retained 500 samples. CSV includes the monitor ID/name/URL, sample ID, UTC timestamp, result, observed status, duration and original error. No-response statuses are empty cells. An empty API export contains the column headers only; the UI disables export when its current filtered snapshot is empty.
+
+Exports use UTF-8 with a BOM, CRLF record endings, quoted cells and doubled embedded quotes. Text fields with a formula prefix (`=`, `+`, `-`, `@`, including full-width variants and leading whitespace/control characters), or starting with a tab/newline, receive a leading apostrophe for spreadsheet import. That protection deliberately changes such exported text; stored history remains unchanged. Spreadsheet applications can alter escaping when saving and reopening CSV; the defense does not guarantee safety after downstream transformations ([OWASP CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection)). Filenames use the monitor UUID and selected filter, never a user-supplied service name. CSV responses keep the same local Host/Origin protections and no-store policy as JSON responses.
 
 ## Architecture
 
@@ -79,7 +95,9 @@ Browser dashboard ── same-origin JSON API ── Node HTTP server
 | `src/runner.mjs` | Scheduling, timeout cancellation, concurrency limit, per-monitor request deduplication |
 | `src/store.mjs` | Parameterized SQLite queries, retention and transactional incident transitions |
 | `src/stats.mjs` | Pure sample aggregation and nearest-rank percentiles |
+| `src/history.mjs` | Bounded history-query validation, CSV serialization and formula-prefix defense |
 | `src/validation.mjs` | Configuration validation and structured client errors |
+| `public/history-client.js` | Abortable history loading with stale-response protection |
 | `public/` | Responsive browser UI, no frontend build step |
 | `test/` | Real HTTP integration tests and isolated queue/store/statistics tests |
 
@@ -110,12 +128,23 @@ Invoke-RestMethod http://127.0.0.1:4312/api/monitors -Method Post -ContentType '
 | --- | --- | --- |
 | GET | `/api/health` | Health check |
 | GET | `/api/dashboard` | Monitors, summaries, recent samples and incidents |
+| GET | `/api/monitors/:id/history` | Filtered retained measurements and unfiltered per-monitor summary |
+| GET | `/api/monitors/:id/history.csv` | Download retained measurements as CSV |
 | POST | `/api/monitors` | Create a monitor |
 | PATCH | `/api/monitors/:id` | Change selected fields |
 | DELETE | `/api/monitors/:id` | Remove a monitor and its history |
 | POST | `/api/monitors/:id/run` | Wait for a manual check |
 | POST | `/api/run-all` | Wait for all enabled monitors |
 | POST | `/api/demo` | Add missing demo services and check enabled monitors |
+
+Both history routes accept optional `filter=all|success|failure` and `limit=1..500` (defaults: `all`, `500`). Filtering is applied before the limit, selecting the newest matching retained rows. Unknown parameters, duplicate parameters, invalid filters and non-integer/out-of-range limits return `400`. Missing/deleted monitors return `404`.
+
+```sh
+curl "http://127.0.0.1:4312/api/monitors/MONITOR_ID/history?filter=failure&limit=20"
+curl "http://127.0.0.1:4312/api/monitors/MONITOR_ID/history.csv?filter=failure" --output failures.csv
+```
+
+Replace `MONITOR_ID` with the UUID returned when creating a monitor. JSON includes `total_retained`, `matched_count`, `returned_count`, `order`, `generated_at`, `summary` and `checks` so callers can distinguish a filtered subset from the full retained series.
 
 ## Configuration and local-use boundary
 
@@ -137,7 +166,7 @@ Design tradeoffs: synchronous SQLite keeps transactions straightforward at this 
 
 ## Validation
 
-The suite covers real local HTTP requests, timeouts, deterministic failure/recovery, CRUD, validation, Host/Origin boundaries, oversized payloads, static-path containment, queue concurrency, deduplication, fake-clock scheduling, configuration changes during requests, percentile definitions, retention, SQLite reopen and cascading deletion.
+The suite covers real local HTTP requests, timeouts, deterministic failure/recovery, CRUD, validation, Host/Origin boundaries, oversized payloads, static-path containment, queue concurrency, deduplication, fake-clock scheduling, configuration changes during requests, percentile definitions, retention, SQLite reopen and cascading deletion. History tests check filtering before limits, newest-first ordering, unchanged summary semantics, CSV encoding/escaping/formula-prefix defense, configuration/reset/deletion behavior, invalid API arguments, and late responses after filter changes or closing the history window.
 
 GitHub Actions runs `node --test` on Ubuntu and Windows with Node.js 24. The workflow is included; its remote status depends on execution after publishing.
 
@@ -151,9 +180,11 @@ Built with Node's [SQLite API](https://nodejs.org/docs/latest-v24.x/api/sqlite.h
 
 **Что показать:** у `slow inventory` сначала timeout 300 мс при ответе за 600 мс. Измени timeout на 1000 мс: проверка станет успешной и инцидент закроется. У `flaky checkout` можно наблюдать последовательность `200, 503, 503, 200` и один инцидент на две ошибки подряд.
 
+**История и экспорт:** нажми **View history →** на карточке сервиса. Фильтры **All checks / Success / Failure** показывают до 500 сохранённых измерений с HTTP-статусом, задержкой и исходной ошибкой. **Refresh** обновляет снимок, **Export CSV** скачивает свежие данные выбранного фильтра. В CSV время записано в UTC; в таблице — в часовом поясе браузера. Пока окно открыто, проверки продолжаются, поэтому экспорт может содержать более новые записи. Доля успехов и p50/p95 над таблицей всегда рассчитаны по всей сохранённой истории, а не только по выбранному фильтру.
+
 **Формулировка для резюме после изучения реализации:**
 
-> Разработал учебную лабораторию мониторинга HTTP API на Node.js и SQLite: очередь с ограничением параллелизма и дедупликацией, таймауты, журнал инцидентов, статистика задержек и интеграционные тесты.
+> Разработал учебную лабораторию мониторинга HTTP API на Node.js и SQLite: очередь с ограничением параллелизма и дедупликацией, таймауты, журнал инцидентов, подробная история с фильтрацией и CSV-экспортом, статистика задержек и интеграционные тесты.
 
 Этот проект — учебное портфолио. Не приписывай ему реальные продакшен-нагрузки, пользователей или гарантии доступности. Для разговора с работодателем важно уметь объяснить код и самостоятельно изменить поведение.
 
@@ -165,8 +196,9 @@ Built with Node's [SQLite API](https://nodejs.org/docs/latest-v24.x/api/sqlite.h
 4. Почему p95 исключает неуспешные запросы и что показывается при отсутствии успешных ответов?
 5. Что происходит при остановке процесса или редактировании монитора во время запроса?
 6. Какие изменения нужны перед публичным хостингом: авторизация, изоляция сетевых запросов, секреты, ограничения частоты, асинхронная БД/воркеры?
+7. Почему CSV экранирует кавычки и добавляет апостроф к строкам с формулами, а клиент игнорирует опоздавший ответ от предыдущего фильтра?
 
-**Идеи для собственного развития:** добавить jitter к расписанию; реализовать утверждения о JSON-теле ответа; экспортировать реальные измерения; внедрить таймеры с тестовым clock; вынести checker в отдельный процесс. Выбери одну задачу, реализуй её и рассказывай именно о своих решениях.
+**Идеи для собственного развития:** добавить jitter к расписанию; реализовать утверждения о JSON-теле ответа; добавить сравнение измерений за выбранные интервалы; внедрить таймеры с тестовым clock; вынести checker в отдельный процесс. Выбери одну задачу, реализуй её и рассказывай именно о своих решениях.
 
 ## License
 

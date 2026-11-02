@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { summarize } from './stats.mjs';
 import { InputError, validateMonitor } from './validation.mjs';
+import { validateHistoryOptions } from './history.mjs';
 
 export class Store {
   constructor(path = ':memory:', now = Date.now) {
@@ -72,8 +73,23 @@ export class Store {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   history(id, limit = 500) {
+    validateHistoryOptions({ limit });
     return this.db.prepare('SELECT * FROM checks WHERE monitor_id=? ORDER BY id DESC LIMIT ?').all(id, limit)
       .reverse().map(row => ({ ...row, ok: !!row.ok }));
+  }
+  historyDetails(id, options = {}) {
+    const { filter, limit } = validateHistoryOptions(options);
+    const monitor = this.get(id);
+    if (!monitor) throw new InputError('Monitor not found', 404);
+    // One synchronous read of the retained series keeps summary and filtered rows consistent.
+    const retained = this.history(id);
+    const matching = retained.filter(check => filter === 'all' || check.ok === (filter === 'success'));
+    const checks = matching.slice(-limit).reverse();
+    return {
+      monitor, filter, limit, order: 'newest-first', retention_checks: 500,
+      total_retained: retained.length, matched_count: matching.length, returned_count: checks.length,
+      summary: summarize(retained), checks, generated_at: this.now(),
+    };
   }
   lastChecked(id) { return this.db.prepare('SELECT checked_at FROM checks WHERE monitor_id=? ORDER BY id DESC LIMIT 1').get(id)?.checked_at ?? null; }
   record(id, result) {

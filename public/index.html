@@ -46,5 +46,16 @@
     <p class="form-hint">GET requests only. Redirects are recorded, not followed. Changing the URL or expected status clears this monitor’s history.</p><p id="form-error" class="form-error" role="alert"></p><button type="submit" class="button button-primary full-width" id="save-button">Save monitor</button>
   </form></dialog>
   <dialog id="delete-dialog"><div class="delete-content"><span class="small-label">REMOVE MONITOR</span><h2 id="delete-title">Remove this service?</h2><p>Its stored checks and incident history will also be removed from this local workspace.</p><div class="delete-actions"><button id="cancel-delete" class="button button-outline">Keep monitor</button><button id="confirm-delete" class="button button-danger">Remove monitor</button></div></div></dialog>
+  <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-title" aria-describedby="history-description">
+    <div class="dialog-heading"><div><span class="small-label">MEASUREMENT HISTORY</span><h2 id="history-title">Service history</h2><p id="history-url" class="history-url"></p></div><button type="button" id="close-history" class="icon-button" aria-label="Close measurement history">×</button></div>
+    <p id="history-description" class="history-description">Explore the latest 500 retained checks. Samples are listed by completion order, newest first.</p>
+    <div class="history-toolbar"><label class="history-select-label">Monitor<select id="history-monitor" aria-label="Select monitor history"></select></label><button type="button" id="history-refresh" class="button button-outline">↻ Refresh</button><button type="button" id="history-export" class="button button-primary" disabled>↓ Export CSV</button></div>
+    <div class="history-controls"><div id="history-filters" class="filter-group" role="group" aria-label="Filter measurements"><button type="button" data-filter="all" aria-pressed="true">All checks</button><button type="button" data-filter="success" aria-pressed="false">Success</button><button type="button" data-filter="failure" aria-pressed="false">Failure</button></div><span id="history-snapshot" class="history-snapshot"></span></div>
+    <p id="history-summary" class="history-summary"></p>
+    <p class="history-definition">Success rate uses all retained samples, not elapsed-time uptime. Latency percentiles use successful samples only. Filters change the table and CSV, not these summary metrics.</p>
+    <div id="history-feedback" class="history-feedback" role="status" aria-live="polite">Loading measurements…</div>
+    <div id="history-table-wrap" class="table-wrap history-table-wrap" hidden><table><caption class="history-table-caption">Observed results · timestamps in your browser’s local timezone</caption><thead><tr><th scope="col">Timestamp</th><th scope="col">Result</th><th scope="col">HTTP status</th><th scope="col">Duration</th><th scope="col">Observed error</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+    <div class="history-bottom"><p>CSV downloads the latest retained samples for the selected filter; it may include newer checks than this view. CSV timestamps use UTC.</p><p id="history-action-status" role="status" aria-live="polite"></p></div>
+  </dialog>
 </body>
 </html>
