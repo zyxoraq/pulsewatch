@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10130f"><meta name="description" content="A local API reliability lab. Watch requests, inspect incidents and learn from deliberate failures.">
+  <title>PulseWatch — API reliability lab</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a href="#overview" class="brand"><img src="/favicon.svg" alt="" width="36" height="36"><span>pulsewatch<span class="brand-sub">RELIABILITY LAB</span></span></a>
+    <div class="workspace"><span class="workspace-icon">L</span><span>Local workspace<small>YOUR MACHINE · SQLITE</small></span><span class="live-dot"></span></div>
+    <p class="nav-label">WORKSPACE</p>
+    <nav aria-label="Main navigation"><a href="#overview" class="nav-item active"><span>◫</span> Overview <span class="nav-count" id="nav-count">0</span></a><a href="#monitors" class="nav-item"><span>⌁</span> Monitors</a><a href="#incidents" class="nav-item"><span>◷</span> Incident log</a></nav>
+    <div class="sidebar-note"><span class="small-label">BUILT FOR EXPLORATION</span><h3>Make it fail.<br>See what happens.</h3><p>Start a local demo to watch timeouts, outages and recoveries unfold.</p><button id="demo-button" class="button button-outline">Load demo services <span>↗</span></button></div>
+    <footer class="sidebar-footer"><span class="live-dot"></span> Local only · no cloud account</footer>
+  </aside>
+  <main id="overview">
+    <div class="topbar"><span>WORKSPACE <span class="slash">/</span> <strong>Overview</strong></span><span id="connection" class="connection">Connecting…</span></div>
+    <header class="page-header"><div><div class="eyebrow"><span class="small-square"></span> THE SIGNAL, WITHOUT THE NOISE</div><h1>Every request tells a story.</h1><p>A live view of your APIs. Catch the failures. Understand the recovery.</p></div><button id="add-button" class="button button-primary">＋ Add monitor</button></header>
+    <div id="notice" role="status" class="notice" hidden></div>
+    <section class="metrics" aria-label="Workspace metrics">
+      <article class="metric"><div class="metric-label">SERVICES MONITORED <span>↗</span></div><div class="metric-value" id="metric-total">0</div><div class="metric-detail" id="metric-active">No monitors yet</div></article>
+      <article class="metric"><div class="metric-label">OBSERVED SUCCESS RATE <span>◌</span></div><div class="metric-value green" id="metric-uptime">—</div><div class="metric-detail">Across retained check samples</div></article>
+      <article class="metric"><div class="metric-label">OPEN INCIDENTS <span>△</span></div><div class="metric-value" id="metric-incidents">0</div><div class="metric-detail" id="incident-caption">No active failures</div></article>
+      <article class="metric"><div class="metric-label">STORED CHECKS <span>⌁</span></div><div class="metric-value" id="metric-checks">0</div><div class="metric-detail">Up to 500 checks per service</div></article>
+    </section>
+    <section id="monitors" class="section">
+      <div class="section-header"><div><h2>Service health <span id="service-count" class="count-chip">0</span></h2><p>Live measurements. The most recent 60 checks appear in each timeline.</p></div><button id="check-all" class="button button-outline">↻ Check all</button></div>
+      <div id="monitor-grid" class="monitor-grid"></div>
+      <div id="empty-state" class="empty-state"><div class="empty-icon">⌁</div><h3>Your first signal starts here.</h3><p>Add an API endpoint, or load three demo services with predictable failures.</p><button id="empty-demo" class="button button-primary">Explore the demo →</button><small>All demo checks make real HTTP requests to this app.</small></div>
+    </section>
+    <section id="incidents" class="section incident-section">
+      <div class="section-header"><div><h2>Incident log</h2><p>Failures open an incident. The first successful check closes it.</p></div><span class="small-label">LATEST 100</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Service / reason</th><th>State</th><th>Started</th><th>Duration</th><th>Failed checks</th></tr></thead><tbody id="incident-list"></tbody></table></div>
+      <div id="no-incidents" class="no-incidents"><span class="green">✓</span> No incidents recorded. A clean slate.</div>
+    </section>
+    <footer class="main-footer"><span>PulseWatch <span class="muted">/</span> An API reliability playground</span><span id="last-refresh">Waiting for first observation</span></footer>
+  </main>
+  <dialog id="monitor-dialog"><form id="monitor-form"><div class="dialog-heading"><div><span class="small-label">MONITOR CONFIGURATION</span><h2 id="dialog-title">Add a service</h2></div><button type="button" id="close-dialog" class="icon-button" aria-label="Close">×</button></div><input type="hidden" id="monitor-id">
+    <label>Service name<input name="name" id="monitor-name" required maxlength="70" placeholder="e.g. Inventory API"></label>
+    <label>Endpoint URL<input name="url" id="monitor-url" type="url" required maxlength="2000" placeholder="http://127.0.0.1:8000/health"></label>
+    <div class="field-row"><label>Interval (seconds)<input id="monitor-interval" type="number" min="2" max="3600" step="1" value="30" required></label><label>Timeout (ms)<input id="monitor-timeout" type="number" min="100" max="10000" step="1" value="1500" required></label></div>
+    <div class="field-row"><label>Expected HTTP status<input id="monitor-status" type="number" min="100" max="599" value="200" required></label><label class="checkbox-label"><input id="monitor-enabled" type="checkbox" checked> Automatic checks</label></div>
+    <p class="form-hint">GET requests only. Redirects are recorded, not followed. Changing the URL or expected status clears this monitor’s history.</p><p id="form-error" class="form-error" role="alert"></p><button type="submit" class="button button-primary full-width" id="save-button">Save monitor</button>
+  </form></dialog>
+  <dialog id="delete-dialog"><div class="delete-content"><span class="small-label">REMOVE MONITOR</span><h2 id="delete-title">Remove this service?</h2><p>Its stored checks and incident history will also be removed from this local workspace.</p><div class="delete-actions"><button id="cancel-delete" class="button button-outline">Keep monitor</button><button id="confirm-delete" class="button button-danger">Remove monitor</button></div></div></dialog>
+</body>
+</html>
